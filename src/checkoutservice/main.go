@@ -81,6 +81,8 @@ type checkoutService struct {
 
 	paymentSvcAddr string
 	paymentSvcConn *grpc.ClientConn
+
+	orderDB *OrderDatabase
 }
 
 func main() {
@@ -119,6 +121,21 @@ func main() {
 	mustConnGRPC(ctx, &svc.currencySvcConn, svc.currencySvcAddr)
 	mustConnGRPC(ctx, &svc.emailSvcConn, svc.emailSvcAddr)
 	mustConnGRPC(ctx, &svc.paymentSvcConn, svc.paymentSvcAddr)
+
+	dbConnStr := os.Getenv("DATABASE_URL")
+	if dbConnStr != "" {
+		log.Info("Database URL provided, initializing database connection")
+		orderDB, err := NewOrderDatabase(dbConnStr)
+		if err != nil {
+			log.Warnf("Failed to connect to database: %v. Orders will not be persisted.", err)
+		} else {
+			svc.orderDB = orderDB
+			defer svc.orderDB.Close()
+			log.Info("Database connection established successfully")
+		}
+	} else {
+		log.Warn("DATABASE_URL not set. Orders will not be persisted to database.")
+	}
 
 	log.Infof("service config: %+v", svc)
 
@@ -274,6 +291,15 @@ func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderReq
 	} else {
 		log.Infof("order confirmation email sent to %q", req.Email)
 	}
+
+	if cs.orderDB != nil {
+		if err := cs.orderDB.SaveOrder(ctx, req, orderResult, &total); err != nil {
+			log.Errorf("failed to save order to database: %+v", err)
+		} else {
+			log.Infof("order %s saved to database successfully", orderResult.OrderId)
+		}
+	}
+
 	resp := &pb.PlaceOrderResponse{Order: orderResult}
 	return resp, nil
 }

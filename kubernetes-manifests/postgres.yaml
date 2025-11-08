@@ -1,0 +1,131 @@
+# PostgreSQL Database for Order Persistence
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  labels:
+    app: postgres
+data:
+  POSTGRES_DB: ordersdb
+  POSTGRES_USER: orderservice
+  POSTGRES_PASSWORD: orderpass123
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pv-claim
+  labels:
+    app: postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - configMapRef:
+                name: postgres-config
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgres-storage
+              subPath: postgres
+            - mountPath: /docker-entrypoint-initdb.d
+              name: init-scripts
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pv-claim
+        - name: init-scripts
+          configMap:
+            name: postgres-init-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-script
+data:
+  init.sql: |
+    -- Create orders table
+    CREATE TABLE IF NOT EXISTS orders (
+        id SERIAL PRIMARY KEY,
+        order_id VARCHAR(255) UNIQUE NOT NULL,
+        user_id VARCHAR(255) NOT NULL,
+        user_email VARCHAR(255),
+        user_currency VARCHAR(10),
+        shipping_tracking_id VARCHAR(255),
+        total_amount_units BIGINT,
+        total_amount_nanos INTEGER,
+        shipping_cost_units BIGINT,
+        shipping_cost_nanos INTEGER,
+        shipping_address_street TEXT,
+        shipping_address_city VARCHAR(255),
+        shipping_address_state VARCHAR(255),
+        shipping_address_country VARCHAR(255),
+        shipping_address_zip INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Create order_items table
+    CREATE TABLE IF NOT EXISTS order_items (
+        id SERIAL PRIMARY KEY,
+        order_id VARCHAR(255) REFERENCES orders(order_id) ON DELETE CASCADE,
+        product_id VARCHAR(255) NOT NULL,
+        quantity INTEGER NOT NULL,
+        cost_units BIGINT,
+        cost_nanos INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Create indexes for better query performance
+    CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
+    CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+
+    -- Grant permissions
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO orderservice;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO orderservice;
